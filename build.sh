@@ -52,5 +52,5 @@ EOF
 cat "$DIST/$NAME.tar.gz" >> "$out"
 chmod +x "$out"
 
-echo "建置完成（$(git rev-parse --short "$REF")）:"
+echo "建置完成（$(git rev-parse --short "$REF^{commit}")）:"
 ls -l "$DIST/$NAME.tar.gz" "$out"
