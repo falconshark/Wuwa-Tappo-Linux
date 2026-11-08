@@ -22,12 +22,23 @@
 
 ## 安裝
 
-1. 解壓縮這個包，並從官方管道下載 Wuwa Tappo 的 Windows 安裝檔（例如 `WuwaTappo-cn_1.0.4_x64-setup.exe`）。
-2. 在解壓縮後的資料夾執行：
+1. 從官方管道下載 Wuwa Tappo 的 Windows 安裝檔（例如 `WuwaTappo-cn_1.0.4_x64-setup.exe`）。
+2. 執行安裝（兩種方式擇一）：
 
-   ```bash
-   ./install.sh ~/Downloads/WuwaTappo-cn_1.0.4_x64-setup.exe
-   ```
+   - 用 git：
+
+     ```bash
+     git clone https://github.com/falconshark/Wuwa-Tappo-Linux.git
+     cd Wuwa-Tappo-Linux
+     ./install.sh ~/Downloads/WuwaTappo-cn_1.0.4_x64-setup.exe
+     ```
+
+   - 不用 git：到 [Releases](https://github.com/falconshark/Wuwa-Tappo-Linux/releases) 下載單一檔案版
+     `wuwa-tappo-linux-install.sh`（不用解壓縮），然後執行
+
+     ```bash
+     bash wuwa-tappo-linux-install.sh ~/Downloads/WuwaTappo-cn_1.0.4_x64-setup.exe
+     ```
 
    - 如果 Steam 裡已經有 GE-Proton 10 以上的版本，會直接拿來用；沒有的話會自動下載 GE-Proton11-6（約 500 MB，並核對官方校驗碼）。
    - 第一次執行要準備 Wine 環境並安裝 WebView2，需要幾分鐘。
@@ -77,6 +88,18 @@
 ```bash
 ./uninstall.sh
 ```
+
+（用單一檔案版安裝的話，先執行 `bash wuwa-tappo-linux-install.sh --extract ~/wuwa-tappo-pkg` 取出 `uninstall.sh`。）
+
+## 建置發佈檔（維護者用）
+
+```bash
+./build.sh            # 以目前的 commit 建置
+./build.sh v1.0.0     # 以指定的 tag 建置
+```
+
+會在 `dist/` 產生 `wuwa-tappo-linux.tar.gz` 與單一檔案安裝程式 `wuwa-tappo-linux-install.sh`，
+把後者上傳到 GitHub Releases 即可。建置內容取自 git，未提交的修改不會被包進去。
 
 會刪除 `~/.local/share/wuwa-tappo`（Wine 環境、桌寵本體與其登入資料、設定）、`wuwa-tappo` 指令與選單捷徑。Steam 的 GE-Proton 不受影響。
 
