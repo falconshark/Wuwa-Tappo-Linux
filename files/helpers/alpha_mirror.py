@@ -87,7 +87,7 @@ class RedrawRequester:
 
     def schedule(self):
         now = time.monotonic()
-        self.due = [now, now + 0.3, now + 1.0]  # Chromium sometimes paints late
+        self.due = [now, now + 0.3, now + 1.0, now + 2.5]  # Chromium sometimes paints late
 
     def tick(self):
         now = time.monotonic()
@@ -249,7 +249,7 @@ def find_targets(d, titles=TITLES):
                     name = c.get_wm_name()
                 except error.XError:
                     continue
-                if cls and cls[1] == WM_CLASS and name in titles:
+                if cls and cls[1] == WM_CLASS and (titles is None or name in titles):
                     out[c.id] = c
                 walk(c)
         except error.XError:
@@ -277,6 +277,78 @@ def ensure_above(d, w):
             ev, event_mask=X.SubstructureRedirectMask | X.SubstructureNotifyMask)
     except error.XError:
         pass
+
+
+class MapWatcher:
+    """Request a WebView repaint whenever any of the app's windows is shown. Under
+    Wine, freshly shown windows (update / login / panel) otherwise stay black/white."""
+    def __init__(self, d):
+        self.d, self.known = d, set()
+
+    def watch(self, windows):
+        for wid, w in windows.items():
+            if wid in self.known:
+                continue
+            self.known.add(wid)
+            try:
+                w.change_attributes(event_mask=X.StructureNotifyMask)
+                if w.get_attributes().map_state == X.IsViewable:
+                    REDRAW.schedule()
+            except error.XError:
+                pass
+        self.known &= set(windows)
+
+    def handle(self, e):
+        if e.type == X.MapNotify and getattr(e, "window", None) is not None \
+                and e.window.id in self.known:
+            REDRAW.schedule()
+
+
+class OpacityRefresher:
+    """Some compositors (seen with MATE's marco) don't re-read _NET_WM_WINDOW_OPACITY
+    when a window is mapped again. When the pet is hidden and shown (F9), the nearly
+    invisible click layer then gets drawn fully opaque -- a grey veil over the whole
+    screen / white boxes behind the pets. Re-writing the property right after each
+    map fixes it."""
+    def __init__(self, d):
+        self.d = d
+        self.op = d.intern_atom("_NET_WM_WINDOW_OPACITY")
+        self.windows = {}  # wid -> (window, was_viewable)
+
+    def watch(self, windows):
+        self.windows = {wid: (w, self.windows.get(wid, (w, False))[1])
+                        for wid, w in windows.items()}
+
+    def refresh_all(self):
+        """Re-write the property on every watched window (e.g. after the compositor
+        was restarted -- it doesn't re-read the property then either)."""
+        for wid, (w, was) in list(self.windows.items()):
+            self.windows[wid] = (w, False)
+        self.tick()
+
+    def tick(self):
+        for wid, (w, was) in list(self.windows.items()):
+            try:
+                now = w.get_attributes().map_state == X.IsViewable
+                if now and not was:
+                    p = w.get_full_property(self.op, Xatom.CARDINAL)
+                    if p is not None and len(p.value):
+                        w.delete_property(self.op)
+                        w.change_property(self.op, Xatom.CARDINAL, 32, [int(p.value[0])])
+            except error.XError:
+                self.windows.pop(wid, None)
+                continue
+            self.windows[wid] = (w, now)
+
+
+def compositor_owner(d):
+    """Window id owning the compositing-manager selection, or None if no compositor
+    is running (then ARGB transparency is impossible and the mirror must step aside)."""
+    try:
+        o = d.get_selection_owner(d.intern_atom("_NET_WM_CM_S%d" % d.get_default_screen()))
+        return o.id if o else None
+    except error.XError:
+        return None
 
 
 def argb_visual(screen):
@@ -307,19 +379,36 @@ def main():
 
     last_scan = 0.0
     last_seen = time.monotonic()  # grace period while the app starts up
+    refresher = OpacityRefresher(d)
+    cm_owner = compositor_owner(d)
+    map_watcher = MapWatcher(d)
     try:
         while running:
             t0 = time.monotonic()
             if t0 - last_scan > 2:
                 last_scan = t0
-                for w in find_targets(d, ABOVE_TITLES).values():
+                above_windows = find_targets(d, ABOVE_TITLES)
+                for w in above_windows.values():
                     ensure_above(d, w)
-                targets = find_targets(d)
+                refresher.watch(above_windows)
+                map_watcher.watch(find_targets(d, None))
+                owner = compositor_owner(d)
+                if owner != cm_owner:
+                    cm_owner = owner
+                    # compositor toggled: drop all mirrors (restores the original
+                    # windows); they are recreated below if a compositor is running
+                    for m in mirrors.values():
+                        m.destroy()
+                    mirrors.clear()
+                    refresher.refresh_all()
+                    REDRAW.schedule()
+                app_windows = find_targets(d)
                 # exit on our own once the app has been gone for a while
-                if targets:
+                if app_windows:
                     last_seen = t0
                 elif t0 - last_seen > 30:
                     break
+                targets = app_windows if cm_owner else {}
                 for wid in list(mirrors):
                     if wid not in targets:
                         mirrors.pop(wid).destroy()
@@ -331,10 +420,11 @@ def main():
                     m.update()
                 except error.XError:
                     mirrors.pop(wid).destroy()
+            refresher.tick()
             REDRAW.tick()
             d.flush()
             while d.pending_events():
-                d.next_event()
+                map_watcher.handle(d.next_event())
             dt = 1 / FPS - (time.monotonic() - t0)
             if dt > 0:
                 select.select([d.fileno()], [], [], dt)

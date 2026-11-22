@@ -79,13 +79,31 @@ def send_button(button: int, down: bool, x: int, y: int) -> None:
     user32.SendInput(2, arr, ctypes.sizeof(INPUT))
 
 
+EnumWindowsProc = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+
 def redraw_pet() -> None:
-    """Make the out-of-process WebView repaint everything. Under Wine it doesn't
-    repaint areas newly exposed when the app changes the window region (e.g. when the
-    chest bubble appears), leaving them white/missing."""
+    """Make the out-of-process WebViews repaint everything. Under Wine they don't
+    repaint areas newly exposed when the app changes a window region (e.g. when the
+    chest bubble appears) or when a window is shown (update / login / panel windows
+    stay black or white). Redraws every visible top-level window of the app."""
     top = user32.FindWindowW(None, "Wuwa Tappo")
-    if top:
-        user32.RedrawWindow(top, None, None, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW)
+    if not top:
+        return
+    pid = wt.DWORD()
+    user32.GetWindowThreadProcessId(top, ctypes.byref(pid))
+    targets = []
+
+    def collect(hwnd, _):
+        p = wt.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(p))
+        if p.value == pid.value and user32.IsWindowVisible(hwnd):
+            targets.append(hwnd)
+        return True
+
+    user32.EnumWindows(EnumWindowsProc(collect), 0)
+    for hwnd in targets:
+        user32.RedrawWindow(hwnd, None, None, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW)
 
 
 def handle_line(line: bytes) -> None:
