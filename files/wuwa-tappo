@@ -6,6 +6,8 @@
 #   wuwa-tappo setup               建立 Wine prefix、安裝 WebView2 Runtime 等
 #   wuwa-tappo kill                結束桌寵與所有輔助程式
 #   wuwa-tappo wine <args...>      在此 prefix 內執行任意 wine 指令
+#   wuwa-tappo remote-setup        讓其他電腦（Mac）的打字/點擊次數也算進桌寵
+#   wuwa-tappo remote-off          關閉上述功能
 #
 # 環境變數：WUWA_TAPPO_HOME（安裝目錄）、WUWA_WINE_DIR（指定 wine 的 bin 目錄）、
 #           WUWA_KEY_FORWARD=0（關閉鍵盤/滑鼠轉送）、WUWA_ALPHA_MIRROR=0（關閉透明覆蓋）
@@ -177,6 +179,28 @@ case "$cmd" in
         exit "$rc"
         ;;
     kill)    kill_helpers; wineserver -k || true ;;
+    remote-setup)
+        conf="$BASE/remote.conf"
+        if [[ ! -f "$conf" ]]; then
+            umask 077
+            printf 'token=%s\nbind=0.0.0.0\nport=47812\n' "$(python3 -I -c 'import secrets; print(secrets.token_hex(16))')" > "$conf"
+        fi
+        token="$(sed -n 's/^token=//p' "$conf")"; port="$(sed -n 's/^port=//p' "$conf")"
+        ip="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p')"
+        echo "已啟用遠端計數（設定檔：$conf）。下次啟動桌寵時生效。"
+        echo
+        echo "在 Mac 上執行（需先下載 wuwa_remote_mac.py）："
+        echo "  python3 wuwa_remote_mac.py --host ${ip:-<這台的IP>} --port $port --token $token"
+        echo
+        echo "只會傳送按鍵與點擊的「次數」，不會傳送按了哪個鍵。"
+        if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+            echo "偵測到防火牆 ufw 已啟用，請允許連線：sudo ufw allow $port/tcp"
+        fi
+        ;;
+    remote-off)
+        rm -f "$BASE/remote.conf"
+        echo "已關閉遠端計數（下次啟動桌寵時生效）。"
+        ;;
     wine)    shift; exec wine "$@" ;;
     run)
         app="$(find_app)"
@@ -214,6 +238,11 @@ case "$cmd" in
         # 透明背景、寶箱重繪、點擊層置頂等（詳見 helpers/alpha_mirror.py）
         if [[ "${WUWA_ALPHA_MIRROR:-1}" == 1 ]]; then
             python3 -I "$BASE/helpers/alpha_mirror.py" "$KEY_PORT" &
+            helper_pids+=($!)
+        fi
+        # 其他電腦送來的打字/點擊次數（wuwa-tappo remote-setup 啟用）
+        if [[ -f "$BASE/remote.conf" && -f "$BASE/winpython/python.exe" ]]; then
+            python3 -I "$BASE/helpers/remote_receiver.py" "$BASE/remote.conf" "$KEY_PORT" &
             helper_pids+=($!)
         fi
         cleanup() { kill "${helper_pids[@]}" 2>/dev/null || true; kill_helpers; rm -f "$BASE/run.pid"; }
